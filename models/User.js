@@ -32,15 +32,20 @@ const userSchema = new mongoose.Schema({
     minlength: [6, 'Le mot de passe doit contenir au moins 6 caractères'],
     select: false
   },
-  adresse: {
+  adresses: [{
     rue: String,
     ville: String,
     codePostal: String,
     pays: {
       type: String,
       default: 'Guinée'
-    }
-  },
+    },
+    isDefault: {
+      type: Boolean,
+      default: false
+    },
+    label: String // e.g., 'Maison', 'Bureau'
+  }],
   role: {
     type: String,
     enum: ['client', 'admin', 'vendeur'],
@@ -58,6 +63,16 @@ const userSchema = new mongoose.Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date,
   lastLogin: Date,
+  boutiqueNom: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Le nom de la boutique ne peut pas dépasser 100 caractères']
+  },
+  boutiqueDescription: {
+    type: String,
+    trim: true,
+    maxlength: [500, 'La description de la boutique ne peut pas dépasser 500 caractères']
+  },
   preferences: {
     newsletter: {
       type: Boolean,
@@ -73,28 +88,28 @@ const userSchema = new mongoose.Schema({
 });
 
 // Encrypt password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
-    next();
+    return next();
   }
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });
 
 // Compare password method
-userSchema.methods.comparePassword = async function(enteredPassword) {
+userSchema.methods.comparePassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Get full name
-userSchema.virtual('fullName').get(function() {
+userSchema.virtual('fullName').get(function () {
   return `${this.prenom} ${this.nom}`;
 });
 
 // Ensure virtual fields are serialized
 userSchema.set('toJSON', {
   virtuals: true,
-  transform: function(doc, ret) {
+  transform: function (doc, ret) {
     delete ret.password;
     return ret;
   }

@@ -102,8 +102,10 @@ router.post('/login', [
     const { email, password } = req.body;
 
     // Check if user exists
+    console.log('Tentative de connexion pour:', email);
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
+      console.log('Utilisateur non trouvé:', email);
       return res.status(401).json({
         status: 'error',
         message: 'Email ou mot de passe incorrect'
@@ -112,7 +114,9 @@ router.post('/login', [
 
     // Check password
     const isMatch = await user.comparePassword(password);
+    console.log('Résultat comparaison password:', isMatch);
     if (!isMatch) {
+      console.log('Mot de passe incorrect pour:', email);
       return res.status(401).json({
         status: 'error',
         message: 'Email ou mot de passe incorrect'
@@ -121,7 +125,7 @@ router.post('/login', [
 
     // Update last login
     user.lastLogin = new Date();
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
     // Generate token
     const token = generateToken(user._id);

@@ -75,7 +75,7 @@ router.post('/', protect, asyncHandler(async (req, res) => {
 // @access  Private/Admin
 router.get('/', protect, authorize('admin'), asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, status } = req.query;
-  
+
   let query = {};
   if (status) {
     query.status = status;
@@ -148,123 +148,132 @@ router.get('/:id', protect, asyncHandler(async (req, res) => {
   });
 }));
 
-// @desc    Mettre à jour le statut d'une commande (Admin)
-// @route   PUT /api/orders/:id/status
-// @access  Private/Admin
-router.put('/:id/status', protect, authorize('admin'), asyncHandler(async (req, res) => {
-  const { status, trackingNumber } = req.body;
+// @desc    Obtenir les commandes pour un vendeur
+// @route   GET /api/orders/vendor
+// @access  Private/Vendeur
+router.get('/vendor', protect, authorize('vendeur', 'admin'), asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10, status } = req.query;
 
-  const order = await Order.findById(req.params.id);
+  // Trouver les produits du vendeur
+  const vendorProducts = await Product.find({ vendeur: req.user.id }).select('_id');
+  const productIds = vendorProducts.map(p => p._id);
 
-  if (!order) {
-    return res.status(404).json({
-      status: 'error',
-      message: 'Commande non trouvée'
-    });
+  let query = {
+    'orderItems.product': { $in: productIds }
+  };
+
+  if (status) {
+    query.status = status;
   }
 
-  order.status = status;
-  if (trackingNumber) {
-    order.trackingNumber = trackingNumber;
-  }
+  const orders = await Order.find(query)
+    .populate('user', 'nom prenom email')
+    .populate('orderItems.product', 'nom images vendeur')
+    .limit(limit * 1)
+    .skip((page - 1) * limit)
+    .sort({ createdAt: -1 });
 
-  if (status === 'Livrée') {
-    order.isDelivered = true;
-    order.deliveredAt = Date.now();
-  }
+  // Filtrer orderItems pour n'inclure que ceux du vendeur si on veut être strict, 
+  // mais généralement on montre toute la commande si elle contient un de ses produits
+  // Pour GuinéeMakiti, on va filtrer les orderItems pour que le vendeur ne voit que ses produits dans la commande
+  const formattedOrders = orders.map(order => {
+    const orderObj = order.toObject();
+    orderObj.orderItems = orderObj.orderItems.filter(item =>
+      productIds.some(id => id.toString() === item.product._id.toString())
+    );
+    return orderObj;
+  });
 
-  const updatedOrder = await order.save();
+  const total = await Order.countDocuments(query);
 
   res.json({
     status: 'success',
     data: {
-      order: updatedOrder
+      orders: formattedOrders,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      totalOrders: total
     }
   });
 }));
 
-// @desc    Marquer une commande comme payée
-// @route   PUT /api/orders/:id/pay
-// @access  Private
-router.put('/:id/pay', protect, asyncHandler(async (req, res) => {
-  const { paymentResult } = req.body;
+// @desc    Obtenir les statistiques du vendeur
+// @route   GET /api/orders/vendor/stats
+// @access  Private/Vendeur
+router.get('/vendor/stats', protect, authorize('vendeur', 'admin'), asyncHandler(async (req, res) => {
+  const vendorProducts = await Product.find({ vendeur: req.user.id }).select('_id');
+  const productIds = vendorProducts.map(p => p._id);
 
-  const order = await Order.findById(req.params.id);
-
-  if (!order) {
-    return res.status(404).json({
-      status: 'error',
-      message: 'Commande non trouvée'
-    });
-  }
-
-  order.isPaid = true;
-  order.paidAt = Date.now();
-  order.paymentResult = paymentResult;
-  order.status = 'Confirmée';
-
-  const updatedOrder = await order.save();
-
-  res.json({
-    status: 'success',
-    data: {
-      order: updatedOrder
-    }
+  const orders = await Order.find({
+    'orderItems.product': { $in: productIds },
+    isPaid: true
   });
-}));
 
-// @desc    Annuler une commande
-// @route   PUT /api/orders/:id/cancel
-// @access  Private
-router.put('/:id/cancel', protect, asyncHandler(async (req, res) => {
-  const order = await Order.findById(req.params.id);
+  let totalRevenue = 0;
+  let totalSales = 0;
 
-  if (!order) {
-    return res.status(404).json({
-      status: 'error',
-      message: 'Commande non trouvée'
+  orders.forEach(order => {
+    order.orderItems.forEach(item => {
+      if (productIds.some(id => id.toString() === item.product.toString())) {
+        totalRevenue += (item.price * item.quantity);
+        totalSales += item.quantity;
+      }
     });
-  }
+  });
 
-  // Vérifier que l'utilisateur est le propriétaire ou admin
-  if (order.user.toString() !== req.user.id && req.user.role !== 'admin') {
-    return res.status(401).json({
-      status: 'error',
-      message: 'Non autorisé à annuler cette commande'
-    });
-  }
+  const pendingOrdersCount = await Order.countDocuments({
+    'orderItems.product': { $in: productIds },
+    status: 'En attente'
+  });
 
-  // Vérifier que la commande peut être annulée
-  if (order.status === 'Livrée' || order.status === 'Annulée') {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Cette commande ne peut pas être annulée'
-    });
-  }
+  const lowStockProducts = await Product.countDocuments({
+    vendeur: req.user.id,
+    stock: { $lt: 10 }
+  });
 
-  order.status = 'Annulée';
+  // Stats par mois (simplifié pour les 6 derniers mois)
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  // Remettre les produits en stock
-  for (let item of order.orderItems) {
-    const product = await Product.findById(item.product);
-    if (product) {
-      product.stock += item.quantity;
-      await product.save();
-    }
-  }
-
-  const updatedOrder = await order.save();
+  const monthlyStats = await Order.aggregate([
+    {
+      $match: {
+        'orderItems.product': { $in: productIds },
+        isPaid: true,
+        createdAt: { $gte: sixMonthsAgo }
+      }
+    },
+    {
+      $unwind: '$orderItems'
+    },
+    {
+      $match: {
+        'orderItems.product': { $in: productIds }
+      }
+    },
+    {
+      $group: {
+        _id: { $month: '$createdAt' },
+        revenue: { $sum: { $multiply: ['$orderItems.price', '$orderItems.quantity'] } }
+      }
+    },
+    { $sort: { '_id': 1 } }
+  ]);
 
   res.json({
     status: 'success',
     data: {
-      order: updatedOrder
+      totalRevenue,
+      totalSales,
+      pendingOrdersCount,
+      lowStockProducts,
+      monthlyStats
     }
   });
 }));
 
 // @desc    Obtenir les statistiques des commandes (Admin)
-// @route   GET /api/orders/stats
+// @route   GET /api/orders/stats/overview
 // @access  Private/Admin
 router.get('/stats/overview', protect, authorize('admin'), asyncHandler(async (req, res) => {
   const totalOrders = await Order.countDocuments();
@@ -289,6 +298,55 @@ router.get('/stats/overview', protect, authorize('admin'), asyncHandler(async (r
       totalRevenue: totalRevenue[0]?.total || 0,
       ordersByStatus,
       recentOrders
+    }
+  });
+}));
+
+// @desc    Mettre à jour le statut d'une commande (Admin/Vendeur)
+// @route   PUT /api/orders/:id/status
+// @access  Private/Admin/Vendeur
+router.put('/:id/status', protect, authorize('admin', 'vendeur'), asyncHandler(async (req, res) => {
+  const { status, trackingNumber } = req.body;
+
+  const order = await Order.findById(req.params.id);
+
+  if (!order) {
+    return res.status(404).json({
+      status: 'error',
+      message: 'Commande non trouvée'
+    });
+  }
+
+  // Si c'est un vendeur, on vérifie qu'il a au moins un produit dans cette commande
+  if (req.user.role === 'vendeur') {
+    const vendorProducts = await Product.find({ vendeur: req.user.id }).select('_id');
+    const productIds = vendorProducts.map(p => p._id.toString());
+    const hasProduct = order.orderItems.some(item => productIds.includes(item.product.toString()));
+
+    if (!hasProduct) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Vous n\'êtes pas autorisé à modifier cette commande'
+      });
+    }
+  }
+
+  order.status = status;
+  if (trackingNumber) {
+    order.trackingNumber = trackingNumber;
+  }
+
+  if (status === 'Livrée') {
+    order.isDelivered = true;
+    order.deliveredAt = Date.now();
+  }
+
+  const updatedOrder = await order.save();
+
+  res.json({
+    status: 'success',
+    data: {
+      order: updatedOrder
     }
   });
 }));

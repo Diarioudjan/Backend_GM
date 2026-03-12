@@ -22,9 +22,9 @@ router.get('/', protect, asyncHandler(async (req, res) => {
   }
 
   // Filtrer les produits inactifs ou en rupture de stock
-  cart.items = cart.items.filter(item => 
-    item.product && 
-    item.product.isActive && 
+  cart.items = cart.items.filter(item =>
+    item.product &&
+    item.product.isActive &&
     item.product.stock > 0
   );
 
@@ -76,7 +76,7 @@ router.post('/add', protect, asyncHandler(async (req, res) => {
 
   // Trouver ou créer le panier de l'utilisateur
   let cart = await Cart.findOne({ user: req.user.id });
-  
+
   if (!cart) {
     cart = new Cart({
       user: req.user.id,
@@ -110,10 +110,10 @@ router.put('/update/:productId', protect, asyncHandler(async (req, res) => {
   const { quantity } = req.body;
   const { productId } = req.params;
 
-  if (quantity < 1) {
+  if (quantity < 0) {
     return res.status(400).json({
       status: 'error',
-      message: 'La quantité doit être au moins 1'
+      message: 'La quantité ne peut pas être négative'
     });
   }
 
@@ -186,7 +186,7 @@ router.delete('/remove/:productId', protect, asyncHandler(async (req, res) => {
 // @access  Private
 router.delete('/clear', protect, asyncHandler(async (req, res) => {
   const cart = await Cart.findOne({ user: req.user.id });
-  
+
   if (!cart) {
     return res.status(404).json({
       status: 'error',
@@ -207,7 +207,7 @@ router.delete('/clear', protect, asyncHandler(async (req, res) => {
 // @access  Private
 router.get('/count', protect, asyncHandler(async (req, res) => {
   const cart = await Cart.findOne({ user: req.user.id });
-  
+
   const itemCount = cart ? cart.totalItems : 0;
 
   res.json({
